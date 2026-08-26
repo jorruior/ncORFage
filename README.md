@@ -150,7 +150,7 @@ python ncORFage.py \
     --outdir results/ \
     --start-mode atg \
     --min-identity 0.3 \
-    --threads 8
+    --threads 1
 ```
 
 ## How it works
