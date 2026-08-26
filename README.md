@@ -143,8 +143,8 @@ python ncORFage.py \
     --threads 1
 
 # Strict: ATG-only, 30% identity
-python orf_bls_pipeline.py \
-    --gtf orfs.gtf \
+python ncORFage.py \
+    --gtf orf_sets/test.gtf \
     --alnset hg38_120mammals \
     --ref-species Human \
     --outdir results/ \
