@@ -22,12 +22,12 @@ works without it.
 ```bash
 conda activate ncORFage
 
-python orf_bls_pipeline.py \
-    --gtf orfs.gtf \
+python ncORFage.py \
+    --gtf orf_sets/test.gtf \
     --alnset hg38_120mammals \
     --ref-species Human \
     --outdir results/ \
-    --threads 8
+    --threads 1
 ```
 
 ## Input
@@ -131,8 +131,8 @@ Each plot includes a legend. Figure height scales with the number of leaves
 
 ```bash
 # Full pipeline: BLS + BLAST + repeats + tree plots
-python orf_bls_pipeline.py \
-    --gtf orfs.gtf \
+python ncORFage.py \
+    --gtf orf_sets/test.gtf \
     --alnset hg38_120mammals \
     --ref-species Human \
     --outdir results/ \
@@ -140,15 +140,7 @@ python orf_bls_pipeline.py \
     --blast-evalue 1e-4 \
     --repeats repeats/hg38.sorted.fa.out \
     --plot-trees \
-    --threads 8
-
-# Mouse ORFs, BLS only
-python orf_bls_pipeline.py \
-    --gtf orfs.gtf \
-    --alnset mm10_60 \
-    --ref-species Mouse \
-    --outdir results/ \
-    --threads 4
+    --threads 1
 
 # Strict: ATG-only, 30% identity
 python orf_bls_pipeline.py \
