@@ -2,7 +2,7 @@
 
 Compute Branch Length Scores (BLS) and ORF conservation ages across species
 using CodAlignView multi-species alignments and PRANK ancestral sequence
-reconstruction. Optionally search against protein databases with BLAST and
+reconstruction. Optionally search against protein and repeat databases with BLAST and
 render per-ORF phylogenetic trees.
 
 ## Installation
