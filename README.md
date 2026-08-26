@@ -1,4 +1,4 @@
-# orf_bls_pipeline
+# ncORFage
 
 Compute Branch Length Scores (BLS) and ORF conservation ages across species
 using CodAlignView multi-species alignments and PRANK ancestral sequence
@@ -8,10 +8,10 @@ render per-ORF phylogenetic trees.
 ## Installation
 
 ```bash
-mamba create -n bls2026 python=3.11
-mamba activate bls2026
-mamba install -c conda-forge ete4 biopython matplotlib
-mamba install -c bioconda prank iqtree ucsc-liftover blast
+conda create -n ncORFage python=3.11
+conda activate ncORFage
+conda install -c conda-forge ete4 biopython matplotlib
+conda install -c bioconda prank iqtree ucsc-liftover blast
 ```
 
 `matplotlib` is only required when using `--plot-trees`. Everything else
@@ -20,7 +20,7 @@ works without it.
 ## Quick start
 
 ```bash
-mamba activate bls2026
+conda activate ncORFage
 
 python orf_bls_pipeline.py \
     --gtf orfs.gtf \
