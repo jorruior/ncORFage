@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-orf_bls_pipeline.py
-Unified pipeline to compute Branch Length Scores (BLS) and ORF conservation ages
+ncORFage.py
+Compute Branch Length Scores (BLS) and ORF conservation ages
 from a GTF of ORFs, using CodAlignView multi-species alignments and PRANK
 ancestral sequence reconstruction.
 
@@ -69,7 +69,7 @@ COLOR_MISSING = "#bbbbbb"        # grey (not aligned / invalid)
 def parse_repeatmasker(rm_path: str) -> Dict[str, List[Tuple[int, int, str]]]:
 	"""
 	Parse a RepeatMasker .out file into a dict: chrom -> sorted list of (start, end, class/family).
-	Chromosome names are stored WITHOUT 'chr' prefix for matching against GTF.
+	Chromosome names are stored without 'chr' prefix for matching against GTF.
 	"""
 	repeats: Dict[str, list] = defaultdict(list)
 	with open(rm_path) as fh:
@@ -111,18 +111,19 @@ def find_repeat_overlaps(
 
 	import bisect
 	starts = [r[0] for r in rm_list]
+	max_ends = []
+	for _, end, _ in rm_list:
+		max_ends.append(max(end, max_ends[-1]) if max_ends else end)
 	overlapping = set()
 
 	for exon_start, exon_end in exons:
-		# Find repeats that could overlap this exon
-		# A repeat (rs, re) overlaps exon (es, ee) if rs <= ee and re >= es
-		# Use bisect to find the range of repeats whose start <= exon_end
+		# Search repeats starting before the exon ends; prefix maxima account for nested repeats.
 		right = bisect.bisect_right(starts, exon_end)
 		# Check backwards from there
 		for i in range(right - 1, -1, -1):
 			rs, re, rc = rm_list[i]
-			if re < exon_start:
-				break  # all earlier repeats end before this exon
+			if max_ends[i] < exon_start:
+				break
 			if rs <= exon_end and re >= exon_start:
 				overlapping.add(rc)
 
@@ -156,7 +157,7 @@ def run_blastp(query_seq: str, db_prefix: str, evalue: float, orf_id: str,
 			   blast_dir: str) -> str:
 	"""
 	Run BLASTP for a single protein sequence against the database.
-	Returns semicolon-separated list of hit subject IDs, or "none".
+	Returns semicolon-separated list of hit subject IDs, "none" for no hits, or "failed" for search errors.
 	"""
 	# Write query to temp file
 	query_file = os.path.join(blast_dir, f"{orf_id}_query.fa")
@@ -178,7 +179,11 @@ def run_blastp(query_seq: str, db_prefix: str, evalue: float, orf_id: str,
 		result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 		if result.returncode != 0:
 			LOG.debug("BLASTP failed for %s: %s", orf_id, result.stderr[:200])
-			return "none"
+			return "failed"
+
+		if not os.path.exists(out_file):
+			LOG.debug("BLASTP produced no output for %s", orf_id)
+			return "failed"
 
 		# Parse hits
 		hits = set()
@@ -203,11 +208,11 @@ def run_blastp(query_seq: str, db_prefix: str, evalue: float, orf_id: str,
 
 	except (subprocess.TimeoutExpired, Exception) as exc:
 		LOG.debug("BLASTP error for %s: %s", orf_id, exc)
-		return "none"
+		return "failed"
 
 def parse_gtf(gtf_path: str) -> Dict[str, dict]:
 	orfs: Dict[str, dict] = {}
-	feature_types = {"exon", "CDS", "ORF"}
+	feature_types = {"CDS", "ORF"}
 	with open(gtf_path) as fh:
 		for line in fh:
 			line = line.strip()
@@ -242,7 +247,7 @@ def _parse_gtf_attr(attrs_str: str, key: str) -> Optional[str]:
 
 
 
-# 2. CodAlignView alignment download
+# CodAlignView alignment download
 
 def _get_url(url: str, timeout: int = 60) -> str:
 	try:
@@ -305,11 +310,7 @@ def parse_fasta_str(fasta_str: str) -> List[Tuple[str, str]]:
 	if name is not None:
 		pairs.append((name, "".join(seq_parts)))
 
-	# Some alignments (e.g. from CodAlignView, or duplicated tree leaves after
-	# ASR) can contain the same species/name more than once. Keep only the
-	# first occurrence per name — later duplicates are dropped — since
-	# downstream code (tree construction, name-keyed dicts) assumes one
-	# sequence per name and would otherwise break or silently misbehave.
+	# Keep the first sequence for each name; downstream lookups require unique names.
 	seen = set()
 	deduped = []
 	for nm, sq in pairs:
@@ -365,20 +366,11 @@ def prepare_codon_alignment(fasta_str, ref_species, invalid_cutoff, min_species=
 		if len(ungapped) < 6:
 			continue
 		if name == ref_species:
-			# For the reference species only check N content on its own ungapped
-			# sequence — gaps in the alignment column reflect other species, not
-			# missing data in the reference itself.
+			# Check reference N content without counting alignment gaps.
 			if ungapped.upper().count("N") / len(ungapped) > invalid_cutoff:
 				continue
 		else:
-			# For non-reference species, compare column-by-column against the
-			# reference. A gap in this species is only counted as invalid (real
-			# missing data / deletion) if the reference has actual sequence at
-			# that column; if the reference is ALSO gapped there, it's just
-			# alignment padding shared with this species and is ignored (both
-			# for the invalid count and the denominator). Ns always count as
-			# invalid regardless of the reference. This is done per species
-			# (pairwise vs. reference), not as a single alignment-wide filter.
+			# Count gaps and Ns as invalid, excluding columns gapped in both species.
 			seq_u = seq.upper()
 			considered = 0
 			n_invalid = 0
@@ -406,7 +398,7 @@ def prepare_codon_alignment(fasta_str, ref_species, invalid_cutoff, min_species=
 
 
 
-# 3. PRANK ancestral reconstruction
+# PRANK ancestral reconstruction
 
 def run_prank(fasta_path, tree_path, output_prefix):
 	cmd = ["prank", f"-d={fasta_path}", f"-t={tree_path}", f"-o={output_prefix}",
@@ -443,7 +435,7 @@ def _sed_inplace(filepath, replacements):
 
 
 
-# 4. ORF conservation logic
+# ORF conservation logic
 
 def remove_gaps(seq):
 	return seq.replace("-", "").replace(".", "")
@@ -475,19 +467,11 @@ def is_valid_sequence(seq, gapped_seq=None, invalid_cutoff=0.5, is_ref=False, re
 		if '.' in gs:
 			return False
 		if is_ref:
-			# The reference is never invalidated by gaps or X's: gaps in its
-			# aligned row reflect insertions present in OTHER lineages, and X's
-			# are not checked at all for the reference. Only N content in the
-			# reference's own ungapped sequence is checked.
+			# For the reference, check N content in the ungapped sequence.
 			if len(seq) > 0 and seq.count('N') / len(seq) > invalid_cutoff:
 				return False
 		elif ref_gapped_seq is not None and len(ref_gapped_seq) == len(gs):
-			# Compare column-by-column against the reference (pairwise, per
-			# species — not a single alignment-wide filter). A column where
-			# this species AND the reference are both gapped is alignment
-			# padding shared with the reference and is ignored entirely (not
-			# counted in the numerator or denominator). Everywhere else, gap/
-			# N/X in this species counts as invalid, same as before.
+			# Exclude shared gaps; count other gaps, Ns, and Xs as invalid.
 			ref_gs = ref_gapped_seq.upper()
 			considered = 0
 			n_invalid = 0
@@ -500,9 +484,7 @@ def is_valid_sequence(seq, gapped_seq=None, invalid_cutoff=0.5, is_ref=False, re
 			if considered == 0 or n_invalid / considered > invalid_cutoff:
 				return False
 		else:
-			# For non-reference species, X counts alongside N and gap in the
-			# invalid fraction (so a sequence isn't disqualified just for
-			# containing any X — only if X (plus N/gap) exceeds the cutoff).
+			# Count Ns, Xs, and gaps toward the invalid fraction.
 			n_invalid = gs.count('N') + gs.count('-') + gs.count('X')
 			if n_invalid / len(gs) > invalid_cutoff:
 				return False
@@ -555,7 +537,7 @@ def is_conserved(
 	query_codons = to_codons(query_nogap)
 	ref_codons = to_codons(ref_nogap)
 
-	#  Start codon evaluation ---
+	# Start codon evaluation
 	if start_mode == "none":
 		has_start = True
 		which_start = 0
@@ -574,7 +556,7 @@ def is_conserved(
 		has_start = any(hits)
 		which_start = hits.index(True) if has_start else 0
 
-	#  Premature stop codon evaluation ---
+	# Premature stop codon evaluation
 	ref_aa_len = len(ref_nogap) // 3 - 1
 	aa_required = floor(ref_aa_len * stop_cutoff)
 	nt_required = (which_start + aa_required) * 3
@@ -588,14 +570,14 @@ def is_conserved(
 		translated = Seq.Seq(region).translate()
 		no_pmsc = "*" not in str(translated)
 
-	#  Identity check ---
+	# Identity check
 	if min_identity > 0:
 		aa_id = compute_aa_identity(ref_seq, query_seq)
 		passes_identity = aa_id is not None and aa_id >= min_identity
 	else:
 		passes_identity = True
 
-	#  Combine ---
+	# Combine
 	if start_mode == "none":
 		conserved = int(no_pmsc and passes_identity)
 	else:
@@ -622,7 +604,7 @@ def compute_aa_identity(ref_seq, query_seq):
 
 
 
-# 5. BLS calculation
+# BLS calculation
 
 def blsum(tree):
 	return sum(n.dist for n in list(tree.traverse())[1:])
@@ -779,10 +761,7 @@ def compute_bls(
 	_name_internal_nodes(tfull)
 	bl_all = blsum(tfull)
 
-	# Build a normalisation map: canonical name in tfull for every leaf, keyed
-	# by a stripped version (non-alphanumeric → "_").  This lets us resolve leaf
-	# names coming from the PRANK/CodAlignView alignment even when special chars
-	# like "." are encoded differently between the two sources.
+	# Normalize leaf names to match alignment and full-tree labels.
 	def _norm_name(s):
 		return "".join(c if c.isalnum() else "_" for c in s).lower()
 
@@ -940,7 +919,7 @@ def _failed_result(ref_sp, reason="prank_failed"):
 
 
 
-# 6. Per-ORF alignment output
+# Per-ORF alignment output
 
 def compute_sequence_status(ref_seq, seq, stop_cutoff, invalid_cutoff, start_mode,
 							initiation_offset, min_identity, is_ref=False):
@@ -1015,7 +994,7 @@ def write_orf_alignments(asr_fasta, asr_tree, orf_id, outdir, ref_sp,
 
 
 
-# 6b. Per-ORF tree plotting
+# Per-ORF tree plotting
 
 def _phylo_coords(tree):
 	"""Compute x (depth from root) and y coordinates for every clade, matching
@@ -1109,7 +1088,7 @@ def write_orf_trees(asr_tree, full_tree_path, orf_id, outdir, ref_sp,
 					species_with_orf_local, asr_fasta,
 					stop_cutoff, invalid_cutoff, start_mode,
 					initiation_offset, min_identity):
-	"""Write two PNGs per ORF: {orf_id}.naive and {orf_id}.asr."""
+	"""Write two SVGs per ORF: {orf_id}.naive and {orf_id}.asr."""
 	if not _PLOTTING_AVAILABLE:
 		return
 
@@ -1192,7 +1171,7 @@ def write_orf_trees(asr_tree, full_tree_path, orf_id, outdir, ref_sp,
 
 
 
-# 7. Error classification
+# Error classification
 
 def _classify_error(exc):
 	msg = str(exc)
@@ -1222,7 +1201,7 @@ def _classify_error(exc):
 
 
 
-# 8. Single-ORF worker
+# Single-ORF worker
 
 def _process_single_orf(
 	orf_id, orf, alnset, ref_species, full_tree_path,
@@ -1231,7 +1210,7 @@ def _process_single_orf(
 	min_identity, force, plot_trees,
 ):
 	"""Returns (orf_id, result_dict, error_reason_or_None).
-	   result_dict is ALWAYS returned (even on failure)."""
+	   result_dict is returned on success and failure."""
 	try:
 		intervals = gtf_to_intervals(orf)
 		aln_fasta_path = os.path.join(aln_dir, f"{orf_id}.fa")
@@ -1312,7 +1291,7 @@ def _process_single_orf(
 
 
 
-# 9. Main pipeline
+# Main pipeline
 
 COL_ORDER = [
 	"orf_id", "chrom", "strand", "n_exons",
@@ -1537,7 +1516,7 @@ def main():
 	parser.add_argument("--blast-evalue", type=float, default=1e-4,
 		help="E-value threshold for BLAST hits (default: 1e-4).")
 	parser.add_argument("--plot-trees", action="store_true",
-		help="Generate per-ORF PNG trees in outdir/trees/ (naive + ASR, dots colored by conservation).")
+		help="Generate per-ORF SVG trees in outdir/trees/ (naive + ASR, dots colored by conservation).")
 	parser.add_argument("--force", action="store_true",
 		help="Re-download and re-run everything.")
 	parser.add_argument("--threads", type=int, default=1,
